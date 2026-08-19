@@ -1,0 +1,13 @@
+{
+  "env": {
+    "PYTHON_PLAYGROUND_DIR": "<YOUR_PLAYGROUND_PATH>"
+  },
+  "permissions": {
+    "additionalDirectories": [
+      "<YOUR_PLAYGROUND_PATH>"
+    ],
+    "allow": [
+      "Bash(<YOUR_PERSONAL_SAFE_PREFIX> *)"
+    ]
+  }
+}
