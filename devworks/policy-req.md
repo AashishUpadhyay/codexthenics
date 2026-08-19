@@ -8,7 +8,6 @@ Portable rules for any repo, machine, and coding agent. Map them onto the host's
 - Hard blocks for secrets, credential stores, and irreversible damage
 - All agent-authored Python runs from a designated playground under isolation
 - Bootstrap with minimum friction in any environment — repo or no repo — without weakening security
-
 - Shared-layer location (repo-local committed vs user-global) is a user decision, made explicit for the environment; machine-specific paths and personal allows stay local
 
 ## Settings layers
