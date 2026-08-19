@@ -183,6 +183,55 @@ is already the real home directory. If given, the directory must already
 exist (the script fails loudly rather than silently falling back if it
 doesn't).
 
+### `verify_checklist.py`
+
+Implements GitHub issue #10: an automated self-check for the policy doc's
+"Done when" acceptance checklist (see the bottom of `policy-req.md`), so the
+checklist is testable after every `bootstrap.py` run or settings/hook change
+instead of being verified by hand.
+
+Driving a real interactive Claude Code session's permission prompts isn't
+scriptable, so this validates `hooks/pretooluse_guard.py`'s decision logic
+directly — the same way Claude Code's `PreToolUse` hook protocol does: JSON
+describing a tool call (`tool_name` / `tool_input` / `cwd`) on stdin, a JSON
+decision on stdout. It builds a throwaway temp sandbox with planted fixtures
+(a playground dir with a real script, a dummy `.env`, a clearly-fake
+`fake.pem`, and a non-secret file — never real credentials), constructs
+`Bash`/`Write` tool-call inputs matching each checklist item, feeds them to
+the hook, and checks the decision against what that item requires. It also
+statically audits `settings.json`'s `allow`/`ask`/`deny` arrays for
+leftover one-off entries (URLs, ports, scratch paths) instead of prefixes.
+The sandbox is deleted on exit whether the run passes or fails.
+
+Because the hook only ever has an opinion on `Write`, `Edit`, and `Bash`
+calls (it has no logic for `Read` at all), the "read a secret file" checklist
+items are expressed as `Bash cat` invocations, direct and piped — not as
+`Read`-tool calls, which would trivially and meaninglessly pass.
+
+Two checklist items are out of the hook's scope and are reported as an
+explicit `MANUAL` result (with the reason) rather than a faked pass/fail:
+
+- **"Playground scripts cannot open host secrets or spawn subprocesses"** —
+  a runtime-sandbox/OS-isolation concern (the policy doc's "Python
+  isolation" section); the hook is a static analyzer only, per the "Known
+  limitations" / mapping-table notes above.
+- **"Policy files still prompt before edit"** — native Claude Code
+  settings.json file-edit permission behavior, not `PreToolUse` hook logic;
+  must be verified live in an actual session against the shipped
+  `settings.json`.
+
+Run it with:
+
+```
+python3 devworks/reference/verify_checklist.py
+```
+
+Add `--verbose` to also print each hook invocation's stdin/stdout/stderr/exit
+code. It prints a `PASS`/`FAIL`/`MANUAL` line per checklist item (with the
+`policy-req.md` bullet it maps to) and a summary line, e.g. `12 passed, 0
+failed, 2 manual`. It exits non-zero if any automated item fails; `MANUAL`
+items never affect the exit code.
+
 ## Installation into a fresh repo (repo-local, committed)
 
 Steps 2–3 below (installing `settings.json` and `settings.local.json`, with
@@ -247,6 +296,12 @@ should print a JSON payload with `"permissionDecision": "deny"`.
   permissions UI to confirm current syntax).
 
 ## Mapping to the policy doc's "Done when" checklist
+
+`verify_checklist.py` (above) automates checking every row of this table
+except the "Playground scripts cannot open host secrets..." and "Policy
+files still prompt before edit" rows, which it reports as `MANUAL` for the
+reasons given in its own section above — those two are already noted below
+as out of the hook's static-analysis scope.
 
 | `policy-req.md` "Done when" item | Satisfied by |
 | --- | --- |
