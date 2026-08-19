@@ -17,6 +17,8 @@ Portable rules for any repo, machine, and coding agent. Map them onto the host's
 
 **Baseline safe allow prefixes** (keep these present, not just remove one-off allows): `which`, `type`, `head`, `tail`, `wc`, `less`, `file`, `stat`, `du`, `df`, `tree`, `diff`, `cut`, `tr`, `column`, `uniq`, `sort`, `printf`, `grep`, `strings`, `jq`, `base64`, `yq`, `mkdir`, version probes (`--version`/`-v`), and read-only git verbs.
 
+**Pipe tails:** safe, read-only tail commands (e.g. the baseline prefixes above) should be allow-listed as pipe tails, so a pipeline composed entirely of allowed stages does not prompt. Any un-allowed stage still forces a prompt — prefix-allow rules do not see past `&&` or `|` into unapproved commands.
+
 Deny always wins over allow. Back up local settings before rewriting them. The agent must not edit its own permission/settings files without asking, and must not enable a full permission bypass.
 
 ## Permission posture
