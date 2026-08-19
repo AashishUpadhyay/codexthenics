@@ -43,6 +43,8 @@ All agent-authored Python, including one-liners, lives in a single designated pl
 
 Fail closed: parse or hook errors ask or deny, never allow.
 
+Sandbox requirement is conditional on host support: verify the host actually exposes a runtime-isolation primitive before requiring it. If none exists, the accepted fallback posture is static checks + deny list + hooks.
+
 - Run playground Python inside the host sandbox (or equivalent OS isolation): no secret env vars, limited filesystem and network.
 - Static import/`open` checks are extra, not sufficient.
 - Block host credential dirs, keychain/secret-store CLIs, and subprocess escapes from playground scripts.
@@ -74,7 +76,7 @@ Use this mapping when the host is Claude Code. Other hosts: same behavior, their
 | Project instructions | `CLAUDE.md` |
 | Allow-rule caveat | `Write(...)` in allow is ignored; use `Edit(...)` |
 | Full bypass | deny `--dangerously-skip-permissions` |
-| Runtime isolation | `sandbox` for playground Python |
+| Runtime isolation | `sandbox` for playground Python if the host exposes it; else static checks + deny list + hooks |
 
 ## Done when
 
