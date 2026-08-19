@@ -102,7 +102,93 @@ override regardless of any JSON body, so it cannot be used to request "ask".
 Using JSON decisions with exit `0` for both `deny` and `ask` is the only way
 to get the "ask" branch honored.
 
+### `bootstrap.py`
+
+A script that installs `settings.json` / `settings.local.json.example` for
+you, instead of doing the copy/edit steps in the "Installation" sections
+below by hand. It implements GitHub issue #7: the shared-layer location
+(repo-local, committed vs. user-global) is a decision made explicit per
+environment, with a user-global default when there's no repo to commit into.
+
+**What it does, each run:**
+
+1. Detects whether `--project-dir` (default: current directory) is inside a
+   commit-capable git repo (a real, non-bare, writable working tree).
+2. Decides where the shared layer goes:
+   - `--layer repo` / `--layer global` (non-interactive) always wins.
+   - Otherwise, a prior recorded choice (see "the marker file" below) is
+     honored silently, unless `--reset` is passed.
+   - Otherwise, if there's no repo, or no commit capability: defaults to
+     user-global, with an explanation printed, no prompt.
+   - Otherwise: prompts interactively for `repo` or `global`, printing the
+     tradeoff.
+3. Backs up any existing destination `settings.json` (and
+   `settings.local.json`) to a timestamped `<name>.bak.<UTC-timestamp>` copy
+   in the same directory **before** writing anything. If the backup itself
+   can't be made, it fails loudly and does not touch the original.
+4. Installs the shared `settings.json` to the chosen destination
+   (`.claude/settings.json` for repo-local, `~/.claude/settings.json` for
+   user-global) and `settings.local.json.example` to
+   `.claude/settings.local.json` at the detected project root — the local
+   file is always installed locally, regardless of the shared-layer choice.
+5. Records the choice in the marker file so future runs don't re-ask.
+
+**Running it, interactively** (prompts if no repo choice can be inferred and
+none is recorded yet):
+
+```
+python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo
+```
+
+**Running it non-interactively / scripted**, with the layer forced by flag
+(no prompt, ever, regardless of marker state):
+
+```
+python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo --layer repo
+# or
+python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo --layer global
+```
+
+`--layer` also updates the marker, so a later plain run without `--layer`
+will honor that choice.
+
+**The "don't re-ask" marker file.** After the first run, the choice is
+recorded at `.claude/.bootstrap-choice.json` under the detected project
+root (`{"layer": "repo"|"global", "timestamp": ..., "project_root": ...,
+"source": "flag"|"marker"|"default-no-repo"|"prompt"}`). Every subsequent
+run reads this file first and, if present and well-formed, reuses the
+recorded layer silently instead of prompting or re-deriving the no-repo
+default — this is what makes it safe to re-run the script (e.g. as part of
+setup automation) without it nagging you every time. A missing or corrupt
+marker is treated the same as no prior choice (re-decided, with a warning
+for the corrupt case), never a hard failure.
+
+To force it to forget the recorded choice and decide again (prompting,
+or re-applying the no-repo default, or honoring `--layer` if you also pass
+one), use `--reset`:
+
+```
+python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo --reset
+```
+
+**`--home-dir` (testing only).** By default "user-global" resolves under the
+real home directory (`Path.home()/.claude/settings.json`). `--home-dir
+<dir>` (or the `CLAUDE_BOOTSTRAP_HOME` env var, if you'd rather not pass a
+flag — the flag wins if both are set) redirects that resolution to
+`<dir>/.claude/settings.json` instead. This exists purely so tests and
+dry-runs of a `--layer global` / no-repo-default install can point at a
+throwaway temp directory instead of risking a write to someone's actual
+`~/.claude/settings.json`. Normal use never needs to pass it — the default
+is already the real home directory. If given, the directory must already
+exist (the script fails loudly rather than silently falling back if it
+doesn't).
+
 ## Installation into a fresh repo (repo-local, committed)
+
+Steps 2–3 below (installing `settings.json` and `settings.local.json`, with
+backup-before-overwrite) can be done for you by `bootstrap.py` — see above —
+instead of by hand. The manual steps remain useful for understanding what
+it's doing, or if you need to deviate from the defaults.
 
 1. Copy this whole `devworks/reference/` directory into the target repo.
 2. Copy `devworks/reference/settings.json` to `.claude/settings.json`
