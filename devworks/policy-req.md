@@ -7,7 +7,9 @@ Portable rules for any repo, machine, and coding agent. Map them onto the host's
 - Minimum approval prompts for routine work
 - Hard blocks for secrets, credential stores, and irreversible damage
 - All agent-authored Python runs from a designated playground under isolation
-- Shared policy is committed; machine-specific paths and personal allows stay local
+- Bootstrap with minimum friction in any environment — repo or no repo — without weakening security
+
+- Shared-layer location (repo-local committed vs user-global) is a user decision, made explicit for the environment; machine-specific paths and personal allows stay local
 
 ## Settings layers
 
@@ -18,6 +20,8 @@ Portable rules for any repo, machine, and coding agent. Map them onto the host's
 **Baseline safe allow prefixes** (keep these present, not just remove one-off allows): `which`, `type`, `head`, `tail`, `wc`, `less`, `file`, `stat`, `du`, `df`, `tree`, `diff`, `cut`, `tr`, `column`, `uniq`, `sort`, `printf`, `grep`, `strings`, `jq`, `base64`, `yq`, `mkdir`, version probes (`--version`/`-v`), and read-only git verbs.
 
 **Pipe tails:** safe, read-only tail commands (e.g. the baseline prefixes above) should be allow-listed as pipe tails, so a pipeline composed entirely of allowed stages does not prompt. Any un-allowed stage still forces a prompt — prefix-allow rules do not see past `&&` or `|` into unapproved commands.
+
+**Shared-layer location is user-chosen, not assumed.** Ask (or use prior direction) whether shared policy lives in repo-local committed config or user-global config. Default when no repo exists, or the environment gives no way to commit: user-global. Note the tradeoff — user-global is machine-scoped, not portable/committed.
 
 Deny always wins over allow. Back up local settings before rewriting them. The agent must not edit its own permission/settings files without asking, and must not enable a full permission bypass.
 
@@ -67,7 +71,7 @@ Use this mapping when the host is Claude Code. Other hosts: same behavior, their
 
 | Policy | Claude Code |
 | --- | --- |
-| Shared settings | `.claude/settings.json` |
+| Shared settings | `.claude/settings.json` (repo present, committable) — else `~/.claude/settings.json` (user's choice, see Settings layers) |
 | Local settings | `.claude/settings.local.json` |
 | User defaults | `~/.claude/settings.json` |
 | Default mode | `acceptEdits` — never `bypassPermissions` |
