@@ -24,6 +24,16 @@ Portable rules for any repo, machine, and coding agent. Map them onto the host's
 
 Deny always wins over allow. Back up local settings before rewriting them. The agent must not edit its own permission/settings files without asking, and must not enable a full permission bypass.
 
+## When both repo and global layers exist (Claude Code)
+
+Repo and global layers are not either/or — a machine commonly has both: a developer's personal global defaults plus a repo that commits its own policy. Claude Code merges them; neither layer silently replaces the other.
+
+**Precedence and merge are different mechanisms.** General settings precedence is managed (enterprise) > CLI flags > local (`.claude/settings.local.json`) > repo (`.claude/settings.json`) > global (`~/.claude/settings.json`) — highest wins, for settings that take a single value. Permission rules (`allow`/`ask`/`deny`) are the documented exception: every layer's rule arrays are unioned, not overridden, and are evaluated in a fixed order regardless of source layer — deny, then ask, then allow, first match wins. A deny rule in any layer blocks the action even when a higher-precedence layer allows it: the docs state this both directions, "a user-level deny blocks a project-level allow" and the reverse, "because deny rules from any scope are evaluated before allow rules." So a permissive global layer can silently widen a strict repo policy's allow surface — its allow rules union in — but it can never override a repo (or any) layer's deny, and a strict global deny equally locks down something a repo layer tries to allow. This matches the deny-wins/allow-unioned behavior assumed elsewhere in this doc; it is Claude Code's actual documented merge semantics, not an approximation.
+
+**Which rules belong in exactly one layer.** The secrets deny list is safe, even useful, to duplicate in both repo and global layers — deny-wins is unconditional and layer-independent, so duplication adds redundancy (e.g. a repo cloned before global config exists still gets the deny) and can never conflict. Baseline allow prefixes belong in the repo layer when a repo exists, not the global layer: repo settings are committed and reviewed, so the allow surface is visible to every collaborator, while an allow rule living only in one developer's global `~/.claude/settings.json` is invisible to teammates and code review, and — per the union behavior above — silently widens every repo that developer touches, not just this one. Reserve the global layer for genuinely personal, cross-repo conveniences; machine-specific paths and personal allow prefixes stay in the local (gitignored) layer regardless of where the shared layer lives, per Settings layers above.
+
+**Auditing the effective merged policy.** Run `/permissions` in a Claude Code session: it lists every active permission rule together with the settings file each one came from, showing the effective merged result across managed, CLI, local, repo, and global layers in one place. Without a running session, read `.claude/settings.local.json`, `.claude/settings.json`, and `~/.claude/settings.json` together and apply deny-then-ask-then-allow across all three combined, not per file — a deny anywhere in that set wins regardless of which file it's in.
+
 ## Permission posture
 
 - Default: auto-accept in-project edits. Never skip the deny list or hook layer.
@@ -73,6 +83,7 @@ Use this mapping when the host is Claude Code. Other hosts: same behavior, their
 | Policy | Claude Code |
 | --- | --- |
 | Shared settings | `.claude/settings.json` (repo present, committable) — else `~/.claude/settings.json` (user's choice, see Settings layers) |
+| Layer precedence | Deny in any layer wins; `allow`/`ask`/`deny` arrays union across managed > CLI flags > local > repo > global; audit with `/permissions` |
 | Local settings | `.claude/settings.local.json` |
 | User defaults | `~/.claude/settings.json` |
 | Default mode | `acceptEdits` — never `bypassPermissions` |
