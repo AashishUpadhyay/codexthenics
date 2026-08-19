@@ -14,10 +14,15 @@ Enforces two rules from devworks/policy-req.md:
      `&&`, `|`, `;`, etc. (e.g. `safe && cat ~/.ssh/id_rsa`).
 
 Fail-closed: any parse error, unrecognized shell syntax, command
-substitution (`$(...)`, backticks), subshell/process-substitution
-`(...)`, or heredoc (`<<`) causes this hook to ASK rather than
-silently allow, because such constructs can hide an unanalyzed
-command from the stage-by-stage scan below.
+substitution (`$(...)`, backticks), a bare/unquoted subshell or
+process-substitution `(...)` token, or heredoc (`<<`) causes this hook
+to ASK rather than silently allow, because such constructs can hide an
+unanalyzed command from the stage-by-stage scan below. Parentheses
+that appear *inside* an already-quoted argument (e.g. `grep '(x)'
+file.txt`, or a literal filename like `"file(1).txt"`) are not treated
+as shell syntax - shlex only ever emits a bare `(`/`)` token when the
+paren was not consumed as part of a quoted string, so the
+tokenizer/classifier below already draws exactly that distinction.
 
 PROTOCOL CONVENTION USED (documented here per task requirement):
 This hook uses Claude Code's *JSON-on-stdout* PreToolUse convention,
@@ -128,11 +133,60 @@ def _is_dotenv_local_variant(basename_lower):
     return basename_lower.startswith(".env.") and basename_lower.endswith(".local")
 
 
+# Shell-variable forms this hook is willing to resolve when matching a
+# path-like argument against the secrets deny list. `os.path.expanduser`
+# only ever handles a leading `~`, so a command like `cat $HOME/.ssh/id_rsa`
+# tokenizes with `$HOME` still literally in the string; without expanding
+# it here, the resolved path becomes `<cwd>/$HOME/...` and never matches
+# the deny list below (see RISK 1 in the peer review).
+_SHELL_VAR_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _expand_known_shell_vars(candidate):
+    """Expand $HOME/${HOME} (from the real home directory) and
+    $USER/${USER} (from the USER env var) in `candidate`. Deliberately
+    does NOT attempt to resolve any other environment variable - that is
+    the caller's job to treat as unsafe/unresolvable."""
+    real_home = os.path.expanduser("~")
+    expanded = re.sub(r"\$\{HOME\}|\$HOME\b", lambda _m: real_home, candidate)
+    user = os.environ.get("USER")
+    if user:
+        expanded = re.sub(r"\$\{USER\}|\$USER\b", lambda _m: user, expanded)
+    return expanded
+
+
+def _has_unresolved_shell_var(text):
+    return bool(_SHELL_VAR_RE.search(text))
+
+
+# A shell-variable reference sitting directly next to a path separator, e.g.
+# `$SOME_VAR/.ssh/id_rsa` or `/home/$SOME_VAR` - used by check_bash_command's
+# raw-string guard (see RISK 1) to decide a candidate is "path-like" and
+# must be resolvable before it's safe to let through.
+_SHELL_VAR_NEAR_SLASH_RE = re.compile(
+    r"(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)(?=/)"
+    r"|(?<=/)(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _has_path_like_unresolved_shell_var(text):
+    return bool(_SHELL_VAR_NEAR_SLASH_RE.search(text))
+
+
 def secrets_match(candidate):
     """True if `candidate` (a path/argument string appearing in a tool
     call) matches any entry in the policy doc's secrets deny list."""
     if not candidate:
         return False
+    original_candidate = candidate
+    candidate = _expand_known_shell_vars(candidate)
+    if "/" in original_candidate and _has_unresolved_shell_var(candidate):
+        # Path-like argument (contains a path separator) still references
+        # an unknown shell variable after expanding the known-safe
+        # $HOME/$USER forms, e.g. `$SOME_OTHER_VAR/.ssh/id_rsa`. We cannot
+        # verify this doesn't resolve to a secrets path, so fail closed
+        # instead of silently letting it through unmatched.
+        return True
     basename = os.path.basename(candidate.rstrip("/"))
     low_basename = basename.lower()
     if _is_dotenv_local_variant(low_basename):
@@ -235,10 +289,39 @@ def check_bash_command(command):
         return ("ask", "command contains a backtick command substitution; cannot safely analyze all stages")
     if "$(" in command:
         return ("ask", "command contains $(...) command substitution; cannot safely analyze all stages")
-    if "(" in command or ")" in command:
-        return ("ask", "command contains parentheses (subshell / process substitution); cannot safely analyze all stages")
+    # NOTE: a blunt `"(" in command or ")" in command` substring check used
+    # to live here, but that also fires on legitimate quoted arguments like
+    # `grep '(pattern)' file.txt` or a literal filename such as
+    # `"file(1).txt"` (see RISK 2 in the peer review). Parentheses are
+    # instead handled by the tokenizer/classifier below: `tokenize()` uses
+    # shlex, which only emits a standalone `(`/`)` punctuation token when
+    # the paren was NOT consumed as part of a quoted string; `classify()`
+    # then raises UnsafeCommand for any such standalone token (it isn't in
+    # KNOWN_OPERATORS), which is caught just below and turned into an
+    # "ask" - so a bare/unquoted paren (real subshell or process
+    # substitution syntax) still fails closed, while a paren embedded in a
+    # quoted argument does not.
     if "<<" in command:
         return ("ask", "command contains a heredoc or herestring (<< / <<<); cannot safely analyze all stages")
+
+    # Expand $HOME/${HOME}/$USER/${USER} in the RAW command text, before any
+    # tokenization. This must happen here rather than inside secrets_match():
+    # shlex (used by tokenize() below) does not keep "$IDENT" together as a
+    # single word - it splits the "$" off into its own token (e.g.
+    # `cat $HOME/.ssh/id_rsa` tokenizes as ['cat', '$', 'HOME/.ssh/id_rsa']) -
+    # so by the time individual words reach secrets_match() the "$" prefix
+    # is already gone and per-word expansion there can never see it. Any
+    # OTHER $VAR/${VAR} that survives this expansion while still sitting
+    # next to a path separator is unresolvable, so fail closed immediately
+    # instead of letting it flow into the tokenizer and disappear (RISK 1).
+    command = _expand_known_shell_vars(command)
+    if _has_path_like_unresolved_shell_var(command):
+        return (
+            "ask",
+            "command references an unresolved shell variable adjacent to a path "
+            "separator (only $HOME/${HOME}/$USER/${USER} are expanded by this hook); "
+            "cannot verify it is free of secrets access",
+        )
 
     normalized = re.sub(r"[\r\n]+", " ; ", command)
 

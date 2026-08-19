@@ -195,7 +195,7 @@ def backup_if_exists(dest_path):
     does not proceed) if the backup itself cannot be made."""
     if not dest_path.exists():
         return None
-    ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S.%f")
+    ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     backup_path = dest_path.with_name(dest_path.name + f".bak.{ts}")
     try:
         shutil.copy2(dest_path, backup_path)
@@ -296,6 +296,16 @@ def determine_layer(args, is_repo, commit_capable, has_remote, project_root, cla
 # ---------------------------------------------------------------------------
 
 
+def _is_relative_to(path, other):
+    """Path.is_relative_to() back-port (that method is 3.9+ only): True if
+    `path` equals `other` or is nested underneath it."""
+    try:
+        path.relative_to(other)
+        return True
+    except ValueError:
+        return False
+
+
 def resolve_home_dir(args):
     """Resolve the directory that "user-global" (~/.claude/...) resolves
     under. Precedence: --home-dir flag > CLAUDE_BOOTSTRAP_HOME env var >
@@ -303,15 +313,46 @@ def resolve_home_dir(args):
 
     This exists so testing/dry-run invocations can never accidentally
     write to a developer's real ~/.claude - normal use should never need
-    to set either override, since the default is the real home dir."""
+    to set either override, since the default is the real home dir.
+
+    Both overrides are canonicalized with Path.resolve() (which follows
+    symlinks all the way to the real filesystem path) and the resulting
+    `<home>/.claude` is compared against where the real `~/.claude`
+    resolves to. This is required, not just a nicety: `.is_dir()` alone
+    does not detect a "sandboxed" test directory that is itself a symlink
+    to the real `~/.claude`, or that merely contains a `.claude` symlink
+    pointing back at it - either would let a test/dry-run run silently
+    overwrite a developer's actual global settings, which is exactly the
+    incident this override flag exists to prevent (see QUESTION 2 in the
+    peer review). If the override does land on the real global config,
+    refuse unless the caller passes --i-really-mean-global."""
     if args.home_dir:
         home_dir = Path(args.home_dir).expanduser().resolve()
+        source = "--home-dir"
     elif os.environ.get("CLAUDE_BOOTSTRAP_HOME"):
         home_dir = Path(os.environ["CLAUDE_BOOTSTRAP_HOME"]).expanduser().resolve()
+        source = "CLAUDE_BOOTSTRAP_HOME"
     else:
         return Path.home()
+
     if not home_dir.is_dir():
-        fail(f"--home-dir/CLAUDE_BOOTSTRAP_HOME {home_dir} is not a directory.")
+        fail(f"{source} {home_dir} is not a directory.")
+
+    real_claude_dir = (Path.home().resolve() / ".claude").resolve()
+    candidate_claude_dir = (home_dir / ".claude").resolve()
+    lands_on_real_global = candidate_claude_dir == real_claude_dir or _is_relative_to(
+        candidate_claude_dir, real_claude_dir
+    )
+    if lands_on_real_global and not args.i_really_mean_global:
+        fail(
+            f"{source} {home_dir} resolves (following symlinks) to "
+            f"{candidate_claude_dir}, which is the real global Claude Code "
+            f"config directory ({real_claude_dir}) or somewhere inside it. "
+            "Refusing to write there: this override exists specifically so "
+            "test/dry-run invocations can never touch a developer's actual "
+            "~/.claude. Pass --i-really-mean-global if you really do intend "
+            "to target the real global config non-interactively."
+        )
     return home_dir
 
 
@@ -369,6 +410,18 @@ def build_arg_parser():
             "the default. Exists so test/dry-run invocations can never "
             "accidentally write to a developer's actual global Claude "
             "Code config."
+        ),
+    )
+    parser.add_argument(
+        "--i-really-mean-global",
+        action="store_true",
+        help=(
+            "Required alongside --home-dir/CLAUDE_BOOTSTRAP_HOME when that "
+            "override resolves (after following symlinks) to the real "
+            "~/.claude directory, or to somewhere inside it. Without this "
+            "flag, such an override is refused rather than silently "
+            "writing to a developer's actual global config - see the "
+            "warning on --home-dir above."
         ),
     )
     return parser
