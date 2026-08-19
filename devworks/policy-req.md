@@ -15,6 +15,8 @@ Portable rules for any repo, machine, and coding agent. Map them onto the host's
 - **Local / gitignored:** personal allow prefixes, playground absolute path, extra working directories.
 - **User-global:** optional personal defaults that apply to every repo.
 
+**Baseline safe allow prefixes** (keep these present, not just remove one-off allows): `which`, `type`, `head`, `tail`, `wc`, `less`, `file`, `stat`, `du`, `df`, `tree`, `diff`, `cut`, `tr`, `column`, `uniq`, `sort`, `printf`, `grep`, `strings`, `jq`, `base64`, `yq`, `mkdir`, version probes (`--version`/`-v`), and read-only git verbs.
+
 Deny always wins over allow. Back up local settings before rewriting them. The agent must not edit its own permission/settings files without asking, and must not enable a full permission bypass.
 
 ## Permission posture
