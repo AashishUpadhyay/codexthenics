@@ -18,7 +18,7 @@ Portable rules for any repo, machine, and coding agent. Map them onto the host's
 
 **Baseline safe allow prefixes** (keep these present, not just remove one-off allows): `which`, `type`, `head`, `tail`, `wc`, `less`, `file`, `stat`, `du`, `df`, `tree`, `diff`, `cut`, `tr`, `column`, `uniq`, `sort`, `printf`, `grep`, `strings`, `jq`, `base64`, `yq`, `mkdir`, version probes (`--version`/`-v`), and read-only git verbs.
 
-**Pipe tails:** safe, read-only tail commands (e.g. the baseline prefixes above) should be allow-listed as pipe tails, so a pipeline composed entirely of allowed stages does not prompt. Any un-allowed stage still forces a prompt — prefix-allow rules do not see past `&&` or `|` into unapproved commands.
+**Pipe tails:** safe, read-only tail commands (e.g. the baseline prefixes above) should be allow-listed as pipe tails, but do not assume a fully-allowed pipeline is auto-approved. Claude Code natively decomposes compound commands on `&&`, `||`, `;`, `|`, `|&`, `&`, and newlines and requires each stage to independently match an allow rule — this is documented behavior, not a blind pass-through past `&&` or `|`. What is not documented or confirmed is that a pipeline where every stage matches an allow rule is guaranteed to skip the prompt as a fast path. Treat pipe-tail allowlisting as requiring a `PreToolUse` hook that parses the command on those separators, checks each stage against the allowlist independently, and fails closed (ask/deny) on parse failure or on command substitution `$(...)`/subshells `(...)` that could hide an unapproved command. Deny rules still win over any hook approval.
 
 **Shared-layer location is user-chosen, not assumed.** Ask (or use prior direction) whether shared policy lives in repo-local committed config or user-global config. Default when no repo exists, or the environment gives no way to commit: user-global. Note the tradeoff — user-global is machine-scoped, not portable/committed.
 
@@ -31,7 +31,8 @@ Deny always wins over allow. Back up local settings before rewriting them. The a
 - If the host ignores some allow-rule tool names (for example Write-in-allow), use the tool the host actually honors.
 - **Read** is allowed everywhere except the secrets deny list.
 - **Web search** is allowed without prompting.
-- **Git and `gh`** are allowed without prompting except destructive or irreversible operations (force-push, history rewrite, hard reset, `clean -fdx`, deleting remotes/protected branches, filter-branch). Those must ask or deny.
+- Outbound `curl`/`wget` with data-posting flags (`-d`, `--data`, `-F`, `--upload-file`, `-T`) must ask before sending — read-only fetches with no data flags are not covered by this prompt.
+- **Git and `gh`** are allowed without prompting except destructive or irreversible operations (force-push, history rewrite, hard reset, `clean -fdx`, deleting remotes/protected branches, filter-branch) and credential-exposing `gh` subcommands (`gh secret list`, `gh secret set`, `gh auth token`). Those must ask or deny.
 
 ## Python playground
 
@@ -55,11 +56,12 @@ Sandbox requirement is conditional on host support: verify the host actually exp
 
 ## Secrets deny list
 
-Apply to read, edit, write, **and** shell (`cat`, `grep`, `less`, and equivalents). Cover home-relative and absolute forms of the same paths. Typical entries:
+Apply to read, edit, write, **and** shell (`cat`, `grep`, `less`, `env`, `printenv`, `set`, and equivalents). Cover home-relative and absolute forms of the same paths. Typical entries:
 
 - `**/.env`, `**/.env.local`, `**/.env.*.local` — narrower than blanket `**/.env.*` because allow-over-deny negation isn't expressible in most host permission models; sample/example/template files fall outside this pattern by construction, not by exemption
-- `*secret*`, `*credential*`, `*.pem`, `*.p12`, `*service-account*.json`, `credentials.json`
-- `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.config/gcloud`, `~/.kube`
+- `*secret*`, `*credential*`, `*.pem`, `*.p12`, `*service-account*.json`, `credentials.json`, `*.tfstate`
+- `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.config/gcloud`, `~/.kube`, `~/.docker/config.json`, `~/.config/gh/hosts.yml`, `~/.git-credentials`, `~/.pgpass`, `~/.zsh_history`, `~/.bash_history`
+- `env`, `printenv`, unqualified `set` — dump environment, including secret vars
 - OS secret stores (for example `security find-` / `security dump-` on macOS)
 
 Prefix allow rules do not see the rest of `safe && cat ~/.ssh/id_rsa`. Whole-command hooks must.
@@ -78,6 +80,7 @@ Use this mapping when the host is Claude Code. Other hosts: same behavior, their
 | Pre-tool hook | `PreToolUse` on Write, Edit, Bash |
 | Project instructions | `CLAUDE.md` |
 | Allow-rule caveat | `Write(...)` in allow is ignored; use `Edit(...)` |
+| Pipe-tail allow | native per-stage decomposition on `&&`/pipe/`;`/etc. is documented; full-pipeline no-prompt fast path unconfirmed — `PreToolUse` hook required for reliable no-prompt allowlisting |
 | Full bypass | deny `--dangerously-skip-permissions` |
 | Runtime isolation | `sandbox` for playground Python if the host exposes it; else static checks + deny list + hooks |
 
