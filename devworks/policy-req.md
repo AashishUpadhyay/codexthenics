@@ -52,7 +52,7 @@ Fail closed: parse or hook errors ask or deny, never allow.
 
 Apply to read, edit, write, **and** shell (`cat`, `grep`, `less`, and equivalents). Cover home-relative and absolute forms of the same paths. Typical entries:
 
-- `**/.env` and `**/.env.*` except `.env.example` / `.env.sample` / `.env.template`
+- `**/.env`, `**/.env.local`, `**/.env.*.local` — narrower than blanket `**/.env.*` because allow-over-deny negation isn't expressible in most host permission models; sample/example/template files fall outside this pattern by construction, not by exemption
 - `*secret*`, `*credential*`, `*.pem`, `*.p12`, `*service-account*.json`, `credentials.json`
 - `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.config/gcloud`, `~/.kube`
 - OS secret stores (for example `security find-` / `security dump-` on macOS)
