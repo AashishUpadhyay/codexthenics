@@ -1,0 +1,23 @@
+# Sensitive local config
+# settings.local.json.example (shipped template) is intentionally NOT ignored
+.claude/settings.local.json
+**/settings.local.json
+!**/settings.local.json.example
+
+# Environment files
+.env
+.env.*
+
+# Key/cert/credential material
+*.pem
+*.key
+*.p12
+credentials.json
+
+# Backup files created by devworks/policy-kit/bootstrap.py
+# backup_if_exists() writes "<original-name>.bak.<%Y%m%dT%H%M%S>" next to the
+# original before overwriting it (settings.json, settings.local.json, and any
+# file under claude/hooks/ installed via install_tree()).
+**/settings.json.bak.*
+**/settings.local.json.bak.*
+**/*.bak.*
