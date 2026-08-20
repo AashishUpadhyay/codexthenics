@@ -164,7 +164,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}/devworks/reference/hooks/pretooluse_guard.py\"",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py\"",
             "timeout": 30
           }
         ]

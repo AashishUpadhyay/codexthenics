@@ -41,9 +41,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent  # devworks/reference/
-HOOK_PATH = SCRIPT_DIR / "hooks" / "pretooluse_guard.py"
-SETTINGS_PATH = SCRIPT_DIR / "settings.json"
+SCRIPT_DIR = Path(__file__).resolve().parent  # devworks/policy-kit/
+HOOK_PATH = SCRIPT_DIR / "claude" / "hooks" / "pretooluse_guard.py"
+SETTINGS_PATH = SCRIPT_DIR / "claude" / "settings.json"
 
 POLICY_DONE_WHEN = {
     "playground": "Python outside the playground is blocked, including `python -c`",
@@ -200,9 +200,11 @@ def main():
         print(f"ERROR: hook not found at {HOOK_PATH}", file=sys.stderr)
         return 1
 
-    sandbox = setup_sandbox()
+    sandbox = None
     results = []
     try:
+        sandbox = setup_sandbox()
+
         # --- must be blocked: python playground confinement ---
         check_must_block(
             results, sandbox, 1, "python -c 'print(1)' (inline interpreter)", "playground",
@@ -277,8 +279,13 @@ def main():
                 "for confirmation rather than auto-applying.",
             )
         )
+    except Exception as exc:
+        results.append(
+            Result(0, "sandbox setup", "isolation", FAIL, f"failed to set up test sandbox: {exc}")
+        )
     finally:
-        shutil.rmtree(sandbox, ignore_errors=True)
+        if sandbox is not None:
+            shutil.rmtree(sandbox, ignore_errors=True)
 
     for r in results:
         print(r.line())

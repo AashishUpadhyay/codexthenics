@@ -25,16 +25,16 @@ What it does, each run:
      policy-req.md's "back up local settings before rewriting them"
      rule. Fails loudly, before any overwrite, if a backup cannot be
      made.
-  4. Installs `settings.json` (this directory's template) to the
-     chosen destination (`.claude/settings.json` for repo-local, or
-     `~/.claude/settings.json` for user-global) and
-     `settings.local.json.example` to `.claude/settings.local.json`
-     at the detected project root (always local, never shared,
-     regardless of the shared-layer choice).
+  4. Installs the shared `claude/` subtree (`settings.json` and
+     `hooks/pretooluse_guard.py`, this directory's templates) verbatim
+     to the chosen destination directory (`.claude/` for repo-local, or
+     `~/.claude/` for user-global) and `settings.local.json.example` to
+     `.claude/settings.local.json` at the detected project root (always
+     local, never shared, regardless of the shared-layer choice).
   5. Records the choice in `.claude/.bootstrap-choice.json` (the
      "marker" file) so subsequent runs don't re-ask.
 
-See devworks/reference/README.md for usage, the marker format, and how
+See devworks/policy-kit/README.md for usage, the marker format, and how
 to reset/force a re-prompt.
 
 Testing note: "user-global" resolves under the real home directory
@@ -53,9 +53,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent  # devworks/reference/
-TEMPLATE_SETTINGS = SCRIPT_DIR / "settings.json"
-TEMPLATE_SETTINGS_LOCAL_EXAMPLE = SCRIPT_DIR / "settings.local.json.example"
+SCRIPT_DIR = Path(__file__).resolve().parent  # devworks/policy-kit/
+CLAUDE_SUBTREE = SCRIPT_DIR / "claude"  # settings.json + hooks/ (the shared layer)
+TEMPLATE_SETTINGS = CLAUDE_SUBTREE / "settings.json"
+TEMPLATE_HOOKS_DIR = CLAUDE_SUBTREE / "hooks"
+TEMPLATE_SETTINGS_LOCAL_EXAMPLE = CLAUDE_SUBTREE / "settings.local.json.example"
 
 MARKER_FILENAME = ".bootstrap-choice.json"
 
@@ -223,6 +225,32 @@ def install_file(template_path, dest_path, label):
     print(f"Wrote {label} -> {dest_path}")
 
 
+def _backup_then_copy(src, dst):
+    """copytree's copy_function hook: back up whatever already sits at
+    `dst` (a lone pre-existing file just as much as a file from a prior
+    full kit install) before it's overwritten, then copy2 as usual."""
+    backup_if_exists(Path(dst))
+    return shutil.copy2(src, dst)
+
+
+def install_tree(src_dir, dest_dir, label):
+    """Copy `src_dir` into `dest_dir` verbatim (shutil.copytree), backing
+    up any pre-existing destination file - individually, whichever files
+    already happen to be there - before it's overwritten. Merges into an
+    existing dest_dir rather than requiring it be absent."""
+    if not src_dir.exists():
+        fail(f"Template directory {src_dir} not found; cannot install {label}.")
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        fail(f"Failed to create directory {dest_dir}: {exc}")
+    try:
+        shutil.copytree(src_dir, dest_dir, copy_function=_backup_then_copy, dirs_exist_ok=True)
+    except OSError as exc:
+        fail(f"Failed to install {label} to {dest_dir}: {exc}")
+    print(f"Wrote {label} -> {dest_dir}")
+
+
 # ---------------------------------------------------------------------------
 # Layer decision
 # ---------------------------------------------------------------------------
@@ -364,8 +392,8 @@ def resolve_home_dir(args):
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Install the devworks/reference agent permission policy "
-            "(settings.json / settings.local.json) into the repo-local "
+            "Install the devworks/policy-kit agent permission policy "
+            "(settings.json / hooks/ / settings.local.json) into the repo-local "
             "or user-global Claude Code config, per devworks/policy-req.md."
         )
     )
@@ -446,16 +474,17 @@ def main(argv=None):
     )
 
     if layer == "repo":
-        shared_dest = claude_dir / "settings.json"
+        shared_dest_dir = claude_dir
     else:
-        shared_dest = resolve_home_dir(args) / ".claude" / "settings.json"
+        shared_dest_dir = resolve_home_dir(args) / ".claude"
 
     local_dest = claude_dir / "settings.local.json"
 
-    print(f"Shared layer -> {shared_dest}")
+    print(f"Shared layer -> {shared_dest_dir}/settings.json (+ hooks/)")
     print(f"Local layer  -> {local_dest}")
 
-    install_file(TEMPLATE_SETTINGS, shared_dest, "shared settings.json")
+    install_file(TEMPLATE_SETTINGS, shared_dest_dir / "settings.json", "shared settings.json")
+    install_tree(TEMPLATE_HOOKS_DIR, shared_dest_dir / "hooks", "shared hooks/")
     install_file(
         TEMPLATE_SETTINGS_LOCAL_EXAMPLE, local_dest, "local settings.local.json"
     )
@@ -464,12 +493,17 @@ def main(argv=None):
 
     if layer == "global":
         print(
-            "Reminder: user-global settings.json still references the hook "
-            "via a project-relative path in the template. If this machine's "
-            "global config needs the PreToolUse hook too, follow the manual "
-            "'Installation into user-global config' steps in README.md to "
-            "copy hooks/pretooluse_guard.py and adjust its command path - "
-            "this script only installs the settings files themselves."
+            "Reminder: the committed settings.json template's PreToolUse hook "
+            "command reads '${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py' "
+            "- a path relative to whatever project you're CURRENTLY in, not to "
+            f"{shared_dest_dir}, where this run just installed the hook. A "
+            "globally-installed settings.json will only find the hook while "
+            "you're inside a project that also has its own "
+            ".claude/hooks/pretooluse_guard.py (e.g. from a repo-local install "
+            "in that same project). For the hook to apply globally too, copy "
+            f"{shared_dest_dir / 'hooks' / 'pretooluse_guard.py'} into each "
+            "project's .claude/hooks/, or point PYTHON_PLAYGROUND_DIR/the hook "
+            "command at an absolute/$HOME-relative path instead."
         )
 
     print("Bootstrap complete.")

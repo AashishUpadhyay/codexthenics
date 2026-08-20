@@ -1,15 +1,36 @@
-# devworks/reference/
+# Claude Code Policy Kit
 
-This directory is the reference implementation of the agent permission and
-sandbox policy in [`devworks/policy-req.md`](../policy-req.md), implementing
-GitHub issue #6. It contains ready-to-drop-in Claude Code configuration and a
+This is the reference implementation of the agent permission and sandbox
+policy in [`devworks/policy-req.md`](../policy-req.md), implementing GitHub
+issues #6–#11. It contains ready-to-drop-in Claude Code configuration and a
 hook script so nobody has to hand-translate the policy prose into
-`settings.json` / hook logic again — copy these files into a repo (or into
-your user-global config) and adjust the local placeholders.
+`settings.json` / hook logic again — copy the `claude/` directory into a repo
+(or into your user-global config) and adjust the local placeholders.
+
+## Layout
+
+```
+devworks/policy-kit/
+  README.md
+  bootstrap.py           <- installs the below for you
+  verify_checklist.py    <- automated self-check for policy-req.md's checklist
+  claude/                <- copy-ready: this whole subtree is deployed
+                             verbatim to .claude/ (repo-local) or ~/.claude/
+                             (global)
+    settings.json
+    settings.local.json.example
+    hooks/
+      pretooluse_guard.py
+```
+
+The `claude/` subdirectory is deliberately structured to mirror the deploy
+target 1:1 — installing it is just "copy this directory to `.claude/`", no
+per-file assembly required. See the `bootstrap.py` and "Installation" sections
+below.
 
 ## Files
 
-### `settings.json`
+### `claude/settings.json`
 
 The shared/committed layer. This is what would live at `.claude/settings.json`
 in a repo, or be merged into `~/.claude/settings.json` for user-global use. It
@@ -41,10 +62,26 @@ contains:
   `--data*`, `-F`/`--form`, `--upload-file`/`-T`, `--post-data`/
   `--post-file`) — read-only fetches are unaffected.
 - **PreToolUse hook wiring** — registers `hooks/pretooluse_guard.py` on
-  `Write|Edit|Bash`, invoked via `${CLAUDE_PROJECT_DIR}` so the file contains
-  no machine-specific absolute paths and can be committed as-is.
+  `Write|Edit|Bash`, invoked via `${CLAUDE_PROJECT_DIR}`.
 
-### `settings.local.json.example`
+**Why the hook path looks "wrong" inside this kit.** The committed hook
+`command` reads:
+
+```
+python3 "${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py"
+```
+
+Notice that path doesn't exist yet anywhere under `devworks/policy-kit/` —
+inside the kit the hook lives at `claude/hooks/pretooluse_guard.py`, with no
+`.claude` segment. That's intentional: the path is written for where the file
+will live *after* deployment, once the whole `claude/` subtree has been
+copied to `.claude/` in the target repo — not for its current location inside
+this kit. This is what makes the template copy-ready as-is: `bootstrap.py`
+(and a manual `cp -r`) can drop `claude/` straight onto `.claude/` without
+ever needing to rewrite this string, because the string was already written
+for the destination, not the source.
+
+### `claude/settings.local.json.example`
 
 A template for the local/gitignored layer (`.claude/settings.local.json`).
 It has two placeholder fields that **must** be edited before use:
@@ -55,7 +92,7 @@ shows where to add personal allow prefixes via the
 `<YOUR_PERSONAL_SAFE_PREFIX>` placeholder — delete that entry if you have no
 personal prefixes to add.
 
-### `hooks/pretooluse_guard.py`
+### `claude/hooks/pretooluse_guard.py`
 
 The `PreToolUse` hook that runs on every `Write`, `Edit`, and `Bash` call. It
 enforces the two things a static allow/deny prefix list cannot express on its
@@ -104,11 +141,11 @@ to get the "ask" branch honored.
 
 ### `bootstrap.py`
 
-A script that installs `settings.json` / `settings.local.json.example` for
-you, instead of doing the copy/edit steps in the "Installation" sections
-below by hand. It implements GitHub issue #7: the shared-layer location
-(repo-local, committed vs. user-global) is a decision made explicit per
-environment, with a user-global default when there's no repo to commit into.
+A script that installs the `claude/` subtree for you, instead of doing the
+copy/edit steps in the "Installation" sections below by hand. It implements
+GitHub issue #7: the shared-layer location (repo-local, committed vs.
+user-global) is a decision made explicit per environment, with a user-global
+default when there's no repo to commit into.
 
 **What it does, each run:**
 
@@ -122,31 +159,35 @@ environment, with a user-global default when there's no repo to commit into.
      user-global, with an explanation printed, no prompt.
    - Otherwise: prompts interactively for `repo` or `global`, printing the
      tradeoff.
-3. Backs up any existing destination `settings.json` (and
-   `settings.local.json`) to a timestamped `<name>.bak.<UTC-timestamp>` copy
-   in the same directory **before** writing anything. If the backup itself
-   can't be made, it fails loudly and does not touch the original.
-4. Installs the shared `settings.json` to the chosen destination
-   (`.claude/settings.json` for repo-local, `~/.claude/settings.json` for
-   user-global) and `settings.local.json.example` to
-   `.claude/settings.local.json` at the detected project root — the local
-   file is always installed locally, regardless of the shared-layer choice.
+3. Backs up any existing destination file (`settings.json`,
+   `hooks/pretooluse_guard.py`, `settings.local.json`) to a timestamped
+   `<name>.bak.<UTC-timestamp>` copy in the same directory **before** writing
+   anything — whether the destination previously held a full prior kit
+   install or just a stray individual file. If a backup itself can't be
+   made, it fails loudly and does not touch the original.
+4. Installs the shared `claude/settings.json` and `claude/hooks/` tree
+   verbatim to the chosen destination directory (`.claude/` for repo-local,
+   `~/.claude/` for user-global — done with `shutil.copytree`, not per-file
+   copy logic, since the kit's own layout now mirrors the deploy target) and
+   `settings.local.json.example` to `.claude/settings.local.json` at the
+   detected project root — the local file is always installed locally,
+   regardless of the shared-layer choice.
 5. Records the choice in the marker file so future runs don't re-ask.
 
 **Running it, interactively** (prompts if no repo choice can be inferred and
 none is recorded yet):
 
 ```
-python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo
+python3 devworks/policy-kit/bootstrap.py --project-dir /path/to/your/repo
 ```
 
 **Running it non-interactively / scripted**, with the layer forced by flag
 (no prompt, ever, regardless of marker state):
 
 ```
-python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo --layer repo
+python3 devworks/policy-kit/bootstrap.py --project-dir /path/to/your/repo --layer repo
 # or
-python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo --layer global
+python3 devworks/policy-kit/bootstrap.py --project-dir /path/to/your/repo --layer global
 ```
 
 `--layer` also updates the marker, so a later plain run without `--layer`
@@ -168,20 +209,32 @@ or re-applying the no-repo default, or honoring `--layer` if you also pass
 one), use `--reset`:
 
 ```
-python3 devworks/reference/bootstrap.py --project-dir /path/to/your/repo --reset
+python3 devworks/policy-kit/bootstrap.py --project-dir /path/to/your/repo --reset
 ```
 
 **`--home-dir` (testing only).** By default "user-global" resolves under the
-real home directory (`Path.home()/.claude/settings.json`). `--home-dir
+real home directory (`Path.home()/.claude/`). `--home-dir
 <dir>` (or the `CLAUDE_BOOTSTRAP_HOME` env var, if you'd rather not pass a
 flag — the flag wins if both are set) redirects that resolution to
-`<dir>/.claude/settings.json` instead. This exists purely so tests and
+`<dir>/.claude/` instead. This exists purely so tests and
 dry-runs of a `--layer global` / no-repo-default install can point at a
 throwaway temp directory instead of risking a write to someone's actual
-`~/.claude/settings.json`. Normal use never needs to pass it — the default
+`~/.claude/`. Normal use never needs to pass it — the default
 is already the real home directory. If given, the directory must already
 exist (the script fails loudly rather than silently falling back if it
-doesn't).
+doesn't). If the resolved directory turns out (after following symlinks) to
+be the real `~/.claude` or somewhere inside it, the script refuses to
+proceed unless `--i-really-mean-global` is also passed.
+
+**Global installs and the hook path caveat.** When the shared layer is
+installed globally, the hook is copied to `~/.claude/hooks/pretooluse_guard.py`
+too — but the committed `settings.json`'s hook command still reads
+`${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py`, which resolves
+relative to whichever project you're *currently* in, not to your home
+directory. A global install therefore only picks up the hook while you're
+inside a project that also has its own `.claude/hooks/pretooluse_guard.py`
+(e.g. from a repo-local install in that same project). `bootstrap.py` prints
+this reminder at the end of a `--layer global` run.
 
 ### `verify_checklist.py`
 
@@ -191,17 +244,19 @@ checklist is testable after every `bootstrap.py` run or settings/hook change
 instead of being verified by hand.
 
 Driving a real interactive Claude Code session's permission prompts isn't
-scriptable, so this validates `hooks/pretooluse_guard.py`'s decision logic
-directly — the same way Claude Code's `PreToolUse` hook protocol does: JSON
-describing a tool call (`tool_name` / `tool_input` / `cwd`) on stdin, a JSON
-decision on stdout. It builds a throwaway temp sandbox with planted fixtures
-(a playground dir with a real script, a dummy `.env`, a clearly-fake
+scriptable, so this validates `claude/hooks/pretooluse_guard.py`'s decision
+logic directly — the same way Claude Code's `PreToolUse` hook protocol does:
+JSON describing a tool call (`tool_name` / `tool_input` / `cwd`) on stdin, a
+JSON decision on stdout. It builds a throwaway temp sandbox with planted
+fixtures (a playground dir with a real script, a dummy `.env`, a clearly-fake
 `fake.pem`, and a non-secret file — never real credentials), constructs
 `Bash`/`Write` tool-call inputs matching each checklist item, feeds them to
 the hook, and checks the decision against what that item requires. It also
-statically audits `settings.json`'s `allow`/`ask`/`deny` arrays for
+statically audits `claude/settings.json`'s `allow`/`ask`/`deny` arrays for
 leftover one-off entries (URLs, ports, scratch paths) instead of prefixes.
-The sandbox is deleted on exit whether the run passes or fails.
+The sandbox is deleted on exit whether the run passes or fails — including
+if sandbox setup itself fails partway through, which is reported as a clean
+`FAIL` result rather than an uncaught traceback.
 
 Because the hook only ever has an opinion on `Write`, `Edit`, and `Bash`
 calls (it has no logic for `Read` at all), the "read a secret file" checklist
@@ -223,7 +278,7 @@ explicit `MANUAL` result (with the reason) rather than a faked pass/fail:
 Run it with:
 
 ```
-python3 devworks/reference/verify_checklist.py
+python3 devworks/policy-kit/verify_checklist.py
 ```
 
 Add `--verbose` to also print each hook invocation's stdin/stdout/stderr/exit
@@ -234,37 +289,38 @@ items never affect the exit code.
 
 ## Installation into a fresh repo (repo-local, committed)
 
-Steps 2–3 below (installing `settings.json` and `settings.local.json`, with
-backup-before-overwrite) can be done for you by `bootstrap.py` — see above —
-instead of by hand. The manual steps remain useful for understanding what
-it's doing, or if you need to deviate from the defaults.
+`bootstrap.py` (see above) does this for you, with backup-before-overwrite.
+The manual steps remain useful for understanding what it's doing, or if you
+need to deviate from the defaults.
 
-1. Copy this whole `devworks/reference/` directory into the target repo.
-2. Copy `devworks/reference/settings.json` to `.claude/settings.json`
-   (create `.claude/` if it doesn't exist).
-3. Copy `devworks/reference/settings.local.json.example` to
+1. Copy `devworks/policy-kit/claude/` to `.claude/` in the target repo — a
+   straight directory copy (`cp -r devworks/policy-kit/claude .claude`, or
+   equivalent), since the kit's layout mirrors the deploy target.
+2. Rename `.claude/settings.local.json.example` to
    `.claude/settings.local.json`, and replace every `<YOUR_PLAYGROUND_PATH>`
    with the absolute path to your Python playground directory (it may live
    outside the repo), and `<YOUR_PERSONAL_SAFE_PREFIX>` with any personal
    allow prefix you want, or delete that line if you have none.
-   `.claude/settings.local.json` should stay gitignored.
-4. Make sure `devworks/reference/hooks/pretooluse_guard.py` is executable
-   (`chmod +x`). The `settings.json` hook command already points at it via
-   `${CLAUDE_PROJECT_DIR}/devworks/reference/hooks/pretooluse_guard.py`, so
-   it must stay at that relative path — or you must update the `command` in
-   `settings.json` to match wherever you actually put it.
-5. No further manual editing is required beyond the local-path edits in
-   step 3.
+   `.claude/settings.local.json` should stay gitignored (the `.example`
+   template itself is fine to leave in place or delete).
+3. Make sure `.claude/hooks/pretooluse_guard.py` is executable (`chmod +x`).
+   `.claude/settings.json`'s hook command already points at it via
+   `${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py` — no path
+   editing needed, since that's exactly where step 1 just put it.
+4. No further manual editing is required beyond the local-path edits in
+   step 2.
 
 ## Installation into user-global config (no repo, or shared across all repos)
 
-1. Copy `devworks/reference/hooks/pretooluse_guard.py` to e.g.
+1. Copy `devworks/policy-kit/claude/hooks/pretooluse_guard.py` to e.g.
    `~/.claude/hooks/pretooluse_guard.py` (`chmod +x` it).
-2. Copy the contents of `devworks/reference/settings.json` into
+2. Copy the contents of `devworks/policy-kit/claude/settings.json` into
    `~/.claude/settings.json`, but change the hook `command` to reference the
    absolute/`$HOME`-relative path you used in step 1 (e.g.
-   `python3 "$HOME/.claude/hooks/pretooluse_guard.py"`), since there is no
-   `${CLAUDE_PROJECT_DIR}` outside a project.
+   `python3 "$HOME/.claude/hooks/pretooluse_guard.py"`), since
+   `${CLAUDE_PROJECT_DIR}` resolves to whatever project you're currently in,
+   not to your home directory — see the "Global installs and the hook path
+   caveat" note under `bootstrap.py` above.
 3. Set `PYTHON_PLAYGROUND_DIR` and any personal allow prefixes directly in
    `~/.claude/settings.json` — user-global config has no separate "local"
    layer. Note the tradeoff the policy doc calls out: user-global settings
@@ -276,7 +332,7 @@ Pipe a synthetic `PreToolUse` payload into the script on stdin, for example:
 
 ```
 echo '{"tool_name":"Bash","tool_input":{"command":"cat ~/.ssh/id_rsa"}}' \
-  | python3 devworks/reference/hooks/pretooluse_guard.py
+  | python3 devworks/policy-kit/claude/hooks/pretooluse_guard.py
 ```
 
 should print a JSON payload with `"permissionDecision": "deny"`.
@@ -305,9 +361,9 @@ as out of the hook's static-analysis scope.
 
 | `policy-req.md` "Done when" item | Satisfied by |
 | --- | --- |
-| One-off allow rules are gone; remaining allows are prefixes | `settings.json` — every `allow`/`ask`/`deny` entry is a reusable prefix or glob pattern, no URLs/ports/scratch paths/quoted script bodies |
-| Python outside the playground is blocked, including `python -c` | `hooks/pretooluse_guard.py` — `check_write_edit` (Write/Edit) and `check_bash_command`'s interpreter/redirect/`tee`/`touch`/copy-verb checks (Bash), both denying `.py`/`.ipynb` outside `PYTHON_PLAYGROUND_DIR` and denying `-c`/stdin/bare-pipe interpreter invocations outright |
-| Secret files cannot be read or `cat`'d; other reads do not prompt | `settings.json` deny list (Read/Edit/Write + `Bash(cat ...)` entries) plus the hook's `secrets_match` stage-by-stage scan for compound commands the deny-list prefixes can't see past |
+| One-off allow rules are gone; remaining allows are prefixes | `claude/settings.json` — every `allow`/`ask`/`deny` entry is a reusable prefix or glob pattern, no URLs/ports/scratch paths/quoted script bodies |
+| Python outside the playground is blocked, including `python -c` | `claude/hooks/pretooluse_guard.py` — `check_write_edit` (Write/Edit) and `check_bash_command`'s interpreter/redirect/`tee`/`touch`/copy-verb checks (Bash), both denying `.py`/`.ipynb` outside `PYTHON_PLAYGROUND_DIR` and denying `-c`/stdin/bare-pipe interpreter invocations outright |
+| Secret files cannot be read or `cat`'d; other reads do not prompt | `claude/settings.json` deny list (Read/Edit/Write + `Bash(cat ...)` entries) plus the hook's `secrets_match` stage-by-stage scan for compound commands the deny-list prefixes can't see past |
 | Playground scripts cannot open host secrets or spawn subprocesses | Documented as a runtime-sandbox concern in the policy doc's "Python isolation" section (host sandbox / OS isolation for the playground process) — outside this hook's static-analysis scope; the hook's secrets deny-list scan is the static-checks half of the "sandbox if available, else static checks + deny list + hooks" fallback posture |
-| Normal playground runs, web search, and non-destructive git/`gh` do not prompt | `settings.json` `allow` list (`WebSearch`, `Bash(git *)`, `Bash(gh *)`, baseline read-only prefixes) plus `defaultMode: "acceptEdits"`, with the hook returning no opinion (exit 0, no output) for anything it doesn't flag |
+| Normal playground runs, web search, and non-destructive git/`gh` do not prompt | `claude/settings.json` `allow` list (`WebSearch`, `Bash(git *)`, `Bash(gh *)`, baseline read-only prefixes) plus `defaultMode: "acceptEdits"`, with the hook returning no opinion (exit 0, no output) for anything it doesn't flag |
 | Policy files still prompt before edit | Not covered by an explicit rule in this reference `settings.json` (no repo-specific policy-file path to name generically) — reference implementers should add an `ask` rule for their own policy file(s), e.g. `Edit(devworks/policy-req.md)`, or rely on the default interactive prompt since these files aren't covered by any `allow` entry above |
