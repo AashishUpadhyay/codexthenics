@@ -79,7 +79,11 @@ copied to `.claude/` in the target repo — not for its current location inside
 this kit. This is what makes the template copy-ready as-is: `bootstrap.py`
 (and a manual `cp -r`) can drop `claude/` straight onto `.claude/` without
 ever needing to rewrite this string, because the string was already written
-for the destination, not the source.
+for the destination, not the source. This holds for repo-local installs and
+as the starting template for global installs; for `--layer global`,
+`bootstrap.py` rewrites the *installed* copy's hook command to an absolute
+path afterward — see "Global installs and the hook path caveat" under
+`bootstrap.py` below.
 
 ### `claude/settings.local.json.example`
 
@@ -226,15 +230,20 @@ doesn't). If the resolved directory turns out (after following symlinks) to
 be the real `~/.claude` or somewhere inside it, the script refuses to
 proceed unless `--i-really-mean-global` is also passed.
 
-**Global installs and the hook path caveat.** When the shared layer is
-installed globally, the hook is copied to `~/.claude/hooks/pretooluse_guard.py`
-too — but the committed `settings.json`'s hook command still reads
-`${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py`, which resolves
-relative to whichever project you're *currently* in, not to your home
-directory. A global install therefore only picks up the hook while you're
-inside a project that also has its own `.claude/hooks/pretooluse_guard.py`
-(e.g. from a repo-local install in that same project). `bootstrap.py` prints
-this reminder at the end of a `--layer global` run.
+**Global installs and the hook path caveat.** The committed template's hook
+command reads `${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py`,
+which resolves relative to whichever project you're *currently* in, not to
+your home directory — left as-is in a global install, the hook would only be
+found while you're inside a project that also has its own
+`.claude/hooks/pretooluse_guard.py`. `bootstrap.py` handles this
+automatically: for a `--layer global` run, after copying the shared layer to
+`~/.claude/` (or `--home-dir`), it rewrites the *installed*
+`settings.json`'s hook command in place to the absolute path the hook was
+just installed to (e.g. `$HOME/.claude/hooks/pretooluse_guard.py`), so the
+hook is found regardless of which project you currently have open. No manual
+path edit or reminder is needed for `bootstrap.py`-driven global installs —
+repo-local installs are left untouched, since `${CLAUDE_PROJECT_DIR}` is
+already correct for them.
 
 ### `verify_checklist.py`
 
@@ -350,6 +359,16 @@ should print a JSON payload with `"permissionDecision": "deny"`.
   your installed Claude Code version uses different permission-rule syntax,
   adjust the `allow`/`ask`/`deny` patterns to match (check the in-app
   permissions UI to confirm current syntax).
+- Per code.claude.com/docs/en/hooks, PreToolUse hooks fail **open**, not
+  closed: if the hook `command` can't be found or executed (e.g. a missing
+  or non-executable script exiting 127), Claude Code treats that as a
+  non-blocking error and lets the tool call proceed — only exit code `2`
+  from a hook that actually ran and chose to block stops the call. There is
+  no built-in "hook missing = block" fallback. Practically: if
+  `pretooluse_guard.py` is later deleted, moved, or has its permissions
+  changed after a correct install, the secrets/playground guard silently
+  stops running and every `Write`/`Edit`/`Bash` call proceeds exactly as if
+  no hook were configured at all, with no error surfaced to block it.
 
 ## Mapping to the policy doc's "Done when" checklist
 

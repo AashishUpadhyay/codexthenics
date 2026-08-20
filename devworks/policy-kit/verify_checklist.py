@@ -44,6 +44,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent  # devworks/policy-kit/
 HOOK_PATH = SCRIPT_DIR / "claude" / "hooks" / "pretooluse_guard.py"
 SETTINGS_PATH = SCRIPT_DIR / "claude" / "settings.json"
+BOOTSTRAP_PATH = SCRIPT_DIR / "bootstrap.py"
 
 POLICY_DONE_WHEN = {
     "playground": "Python outside the playground is blocked, including `python -c`",
@@ -52,6 +53,7 @@ POLICY_DONE_WHEN = {
     "no_prompt": "Normal playground runs, web search, and non-destructive git/`gh` do not prompt",
     "prefixes": "One-off allow rules are gone; remaining allows are prefixes",
     "policy_edit": "Policy files still prompt before edit",
+    "global_hook_path": "Global install's settings.json hook command resolves to an installed file, not a project-relative template path",
 }
 
 PASS, FAIL, MANUAL = "PASS", "FAIL", "MANUAL"
@@ -187,6 +189,112 @@ def check_settings_prefixes(results, number):
         )
 
 
+def check_global_hook_path(results, number):
+    """Drives a real `bootstrap.py --layer global` install into a throwaway
+    sandboxed home dir and asserts the resulting settings.json's PreToolUse
+    hook command was rewritten to an absolute path that actually exists on
+    disk, rather than left as the project-relative
+    '${CLAUDE_PROJECT_DIR}/...' template string (which resolves nowhere
+    useful in a global install - see the "Known limitations" fail-open note
+    in README.md). Never touches a real ~/.claude - only ever passes
+    --home-dir <tempdir> to bootstrap.py."""
+    description = "bootstrap.py --layer global rewrites the installed hook command to an absolute, existing path"
+    temp_home = None
+    temp_project = None
+    try:
+        temp_home = Path(tempfile.mkdtemp(prefix="verify_checklist_home_"))
+        temp_project = Path(tempfile.mkdtemp(prefix="verify_checklist_project_"))
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(BOOTSTRAP_PATH),
+                "--project-dir", str(temp_project),
+                "--layer", "global",
+                "--home-dir", str(temp_home),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            results.append(
+                Result(
+                    number, description, "global_hook_path", FAIL,
+                    f"bootstrap.py exited {proc.returncode}; stderr: {proc.stderr.strip()}",
+                )
+            )
+            return
+
+        settings_path = temp_home / ".claude" / "settings.json"
+        try:
+            data = json.loads(settings_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            results.append(
+                Result(
+                    number, description, "global_hook_path", FAIL,
+                    f"could not read/parse installed {settings_path}: {exc}",
+                )
+            )
+            return
+
+        command = None
+        for group in data.get("hooks", {}).get("PreToolUse", []):
+            for hook in group.get("hooks", []):
+                if hook.get("type") == "command" and "pretooluse_guard.py" in hook.get("command", ""):
+                    command = hook["command"]
+                    break
+            if command:
+                break
+
+        if command is None:
+            results.append(
+                Result(
+                    number, description, "global_hook_path", FAIL,
+                    f"no PreToolUse command hook referencing pretooluse_guard.py found in {settings_path}",
+                )
+            )
+            return
+
+        # Strip the `python3 "<path>"` wrapper to get the bare path.
+        hook_path_str = command.strip()
+        if hook_path_str.startswith("python3 "):
+            hook_path_str = hook_path_str[len("python3 "):].strip()
+        hook_path_str = hook_path_str.strip('"')
+
+        if "${CLAUDE_PROJECT_DIR}" in hook_path_str:
+            results.append(
+                Result(
+                    number, description, "global_hook_path", FAIL,
+                    f"hook command still contains the unrewritten template placeholder: {command!r}",
+                )
+            )
+            return
+
+        if not os.path.exists(hook_path_str):
+            results.append(
+                Result(
+                    number, description, "global_hook_path", FAIL,
+                    f"rewritten hook path does not exist on disk: {hook_path_str!r} (command: {command!r})",
+                )
+            )
+            return
+
+        results.append(
+            Result(
+                number, description, "global_hook_path", PASS,
+                f"hook command resolves to an installed file: {hook_path_str}",
+            )
+        )
+    except Exception as exc:
+        results.append(Result(number, description, "global_hook_path", FAIL, f"error: {exc}"))
+    finally:
+        if temp_home is not None:
+            shutil.rmtree(temp_home, ignore_errors=True)
+        if temp_project is not None:
+            shutil.rmtree(temp_project, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Probe the policy-req.md 'Done when' checklist against pretooluse_guard.py's actual decision logic."
@@ -279,6 +387,9 @@ def main():
                 "for confirmation rather than auto-applying.",
             )
         )
+
+        # --- drives a real bootstrap.py --layer global install into a sandbox ---
+        check_global_hook_path(results, 15)
     except Exception as exc:
         results.append(
             Result(0, "sandbox setup", "isolation", FAIL, f"failed to set up test sandbox: {exc}")

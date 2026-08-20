@@ -251,6 +251,56 @@ def install_tree(src_dir, dest_dir, label):
     print(f"Wrote {label} -> {dest_dir}")
 
 
+def rewrite_global_hook_path(settings_path, absolute_hook_path):
+    """For a user-global install only: rewrite the just-installed
+    settings.json's PreToolUse hook command from the template's
+    project-relative '${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py'
+    to `absolute_hook_path` - the actual path the hook was just installed to.
+
+    This matters because ${CLAUDE_PROJECT_DIR} resolves to whatever project
+    is currently open, not to the home directory a global install lives
+    under. Left unrewritten, a globally-installed hook silently fails to be
+    found (python3 exits non-zero on the missing path) in any project that
+    doesn't *also* have its own repo-local .claude/hooks/pretooluse_guard.py
+    - and per Claude Code's hook contract, a hook command that can't be
+    found or executed fails OPEN (the tool call proceeds), not closed. See
+    the "Known limitations" section of README.md.
+
+    Repo-local installs must never call this - their settings.json is
+    already correct as installed and must remain byte-identical to the
+    template's ${CLAUDE_PROJECT_DIR} form."""
+    template_fragment = "${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py"
+    try:
+        data = json.loads(settings_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"Failed to read/parse {settings_path} to rewrite the hook path: {exc}")
+
+    matched = False
+    for group in data.get("hooks", {}).get("PreToolUse", []):
+        for hook in group.get("hooks", []):
+            if hook.get("type") != "command":
+                continue
+            command = hook.get("command", "")
+            if template_fragment in command:
+                hook["command"] = command.replace(template_fragment, str(absolute_hook_path))
+                matched = True
+
+    if not matched:
+        fail(
+            f"Could not find the expected PreToolUse hook command fragment "
+            f"({template_fragment!r}) to rewrite in {settings_path} - the "
+            "settings.json structure or template path may have changed; "
+            "update rewrite_global_hook_path() to match, rather than "
+            "silently leaving a broken global hook path installed."
+        )
+
+    try:
+        settings_path.write_text(json.dumps(data, indent=2) + "\n")
+    except OSError as exc:
+        fail(f"Failed to write rewritten {settings_path}: {exc}")
+    print(f"Rewrote global hook path in {settings_path} -> {absolute_hook_path}")
+
+
 # ---------------------------------------------------------------------------
 # Layer decision
 # ---------------------------------------------------------------------------
@@ -485,6 +535,13 @@ def main(argv=None):
 
     install_file(TEMPLATE_SETTINGS, shared_dest_dir / "settings.json", "shared settings.json")
     install_tree(TEMPLATE_HOOKS_DIR, shared_dest_dir / "hooks", "shared hooks/")
+
+    if layer == "global":
+        rewrite_global_hook_path(
+            shared_dest_dir / "settings.json",
+            shared_dest_dir / "hooks" / "pretooluse_guard.py",
+        )
+
     install_file(
         TEMPLATE_SETTINGS_LOCAL_EXAMPLE, local_dest, "local settings.local.json"
     )
@@ -493,17 +550,12 @@ def main(argv=None):
 
     if layer == "global":
         print(
-            "Reminder: the committed settings.json template's PreToolUse hook "
-            "command reads '${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py' "
-            "- a path relative to whatever project you're CURRENTLY in, not to "
-            f"{shared_dest_dir}, where this run just installed the hook. A "
-            "globally-installed settings.json will only find the hook while "
-            "you're inside a project that also has its own "
-            ".claude/hooks/pretooluse_guard.py (e.g. from a repo-local install "
-            "in that same project). For the hook to apply globally too, copy "
-            f"{shared_dest_dir / 'hooks' / 'pretooluse_guard.py'} into each "
-            "project's .claude/hooks/, or point PYTHON_PLAYGROUND_DIR/the hook "
-            "command at an absolute/$HOME-relative path instead."
+            "Global install: rewrote the installed settings.json's PreToolUse "
+            "hook command to the absolute installed path "
+            f"({shared_dest_dir / 'hooks' / 'pretooluse_guard.py'}) in place of "
+            "the template's project-relative "
+            "'${CLAUDE_PROJECT_DIR}/.claude/hooks/pretooluse_guard.py', so the "
+            "hook is found regardless of which project you currently have open."
         )
 
     print("Bootstrap complete.")
